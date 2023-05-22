@@ -89,8 +89,8 @@ fn main() {
                 let info = info_by_symbol.get_mut(symbol).unwrap();
 
                 if line.starts_with("call") {
-                    info.callees
-                        .insert(line.split_ascii_whitespace().nth(1).unwrap());
+                    let mangled_name = line.split_ascii_whitespace().nth(1).unwrap();
+                    info.callees.insert(mangled_name);
                 }
                 if !line.starts_with(".") {
                     info.instructions_num += 1;
