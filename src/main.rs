@@ -9,6 +9,23 @@ struct CMakeCompileCommand {
     output: String,
 }
 
+#[derive(Debug)]
+struct FunctionInfo<'a> {
+    name: &'a str,
+    callees: std::collections::HashSet<&'a str>,
+    instructions_num: i32,
+}
+
+impl<'a> FunctionInfo<'a> {
+    fn new(name: &'a str) -> FunctionInfo {
+        FunctionInfo {
+            name: name,
+            callees: std::collections::HashSet::new(),
+            instructions_num: 0,
+        }
+    }
+}
+
 fn main() {
     let compile_commands_path = "/home/jacques/blender/build_debug/compile_commands.json";
     let file = std::fs::File::open(compile_commands_path).expect("Couldn't load compile commands");
@@ -56,26 +73,35 @@ fn main() {
         .read_to_string(&mut assembly)
         .unwrap();
 
-    let mut lines_by_symbol: HashMap<&str, Vec<&str>> = std::collections::hash_map::HashMap::new();
+    let mut info_by_symbol: HashMap<&str, FunctionInfo> =
+        std::collections::hash_map::HashMap::new();
     let mut current_symbol: Option<&str> = None;
     for line in assembly.lines() {
         if !line.starts_with("\t") && !line.starts_with(".") && line.len() >= 3 {
             let symbol = &line[1..line.len() - 1];
             current_symbol = Some(symbol);
+            info_by_symbol.insert(symbol, FunctionInfo::new(symbol));
             continue;
         }
         match current_symbol {
             Some(symbol) => {
                 let line = line.trim();
+                let info = info_by_symbol.get_mut(symbol).unwrap();
+
                 if line.starts_with("call") {
-                    let values = lines_by_symbol.entry(symbol).or_insert(Vec::new());
-                    values.push(line);
+                    info.callees
+                        .insert(line.split_ascii_whitespace().nth(1).unwrap());
+                }
+                if !line.starts_with(".") {
+                    info.instructions_num += 1;
                 }
             }
             None => {}
         }
     }
 
-    println!("{:#?}", lines_by_symbol)
+    info_by_symbol.retain(|_, x| x.instructions_num > 0);
+
+    println!("{:#?}", info_by_symbol)
     // std::fs::remove_file(assembly_file_path).expect("Can't remove file");
 }
