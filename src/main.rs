@@ -76,6 +76,17 @@ fn run_assembly_generation(command: &AssemblyGenerationCommand) -> Result<()> {
     Ok(())
 }
 
+fn get_assembly_of_cmake_command(cmake_command: &CMakeCompileCommand) -> Result<String> {
+    let asm_command = adapt_cmake_command_to_generate_assembly(cmake_command)?;
+    run_assembly_generation(&asm_command)?;
+
+    let mut assembly = String::new();
+    std::fs::File::open(&asm_command.output)?.read_to_string(&mut assembly)?;
+    std::fs::remove_file(&asm_command.output).expect("Can't remove file");
+
+    Ok(assembly)
+}
+
 fn app() -> Result<()> {
     let compile_commands_path = "/home/jacques/blender/build_debug/compile_commands.json";
     let compile_commands =
@@ -89,11 +100,7 @@ fn app() -> Result<()> {
     let command = command_by_output
         .get("source/blender/modifiers/CMakeFiles/bf_modifiers.dir/intern/MOD_uvwarp.cc.o")
         .ok_or(eyre::eyre!("Can't find compile command."))?;
-    let asm_command = adapt_cmake_command_to_generate_assembly(command)?;
-    run_assembly_generation(&asm_command)?;
-
-    let mut assembly = String::new();
-    std::fs::File::open(&asm_command.output)?.read_to_string(&mut assembly)?;
+    let assembly = get_assembly_of_cmake_command(command)?;
 
     let mut info_by_symbol: HashMap<&str, FunctionInfo> =
         std::collections::hash_map::HashMap::new();
@@ -128,7 +135,6 @@ fn app() -> Result<()> {
     info_by_symbol.retain(|_, x| x.instructions_num > 0);
 
     println!("{:#?}", info_by_symbol);
-    // std::fs::remove_file(assembly_file_path).expect("Can't remove file");
     Ok(())
 }
 
