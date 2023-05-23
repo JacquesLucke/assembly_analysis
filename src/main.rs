@@ -1,6 +1,7 @@
 use eyre::Result;
 use serde::Deserialize;
-use std::{collections::HashMap, io::Read, path::PathBuf, process::Command};
+use std::collections::HashMap;
+use std::{io::Read, path::PathBuf, process::Command};
 
 #[derive(Deserialize, Debug)]
 struct CMakeCompileCommand {
@@ -21,7 +22,7 @@ struct AssemblyGenerationCommand {
 struct FunctionInfo<'a> {
     name: &'a str,
     callees: std::collections::HashSet<&'a str>,
-    instructions_num: i32,
+    instructions_num: usize,
 }
 
 impl<'a> FunctionInfo<'a> {
@@ -87,6 +88,48 @@ fn get_assembly_of_cmake_command(cmake_command: &CMakeCompileCommand) -> Result<
     Ok(assembly)
 }
 
+#[derive(Debug)]
+struct ObjectFileAssemblyInfo<'a> {
+    info_by_function: HashMap<&'a str, FunctionInfo<'a>>,
+}
+
+fn parse_assembly(assembly: &str) -> Result<ObjectFileAssemblyInfo> {
+    let mut info = ObjectFileAssemblyInfo {
+        info_by_function: HashMap::new(),
+    };
+    let mut current_symbol: Option<&str> = None;
+    for line in assembly.lines() {
+        if !line.starts_with("\t") && !line.starts_with(".") && line.len() >= 3 {
+            let symbol = &line[1..line.len() - 1];
+            current_symbol = Some(symbol);
+            info.info_by_function
+                .insert(symbol, FunctionInfo::new(symbol));
+            continue;
+        }
+        match current_symbol {
+            Some(symbol) => {
+                let line = line.trim();
+                let mut function_info = info.info_by_function.get_mut(symbol).unwrap();
+
+                if line.starts_with("call") {
+                    let mangled_name = line
+                        .split_ascii_whitespace()
+                        .nth(1)
+                        .ok_or(eyre::eyre!("Couldn't parse function name."))?;
+                    function_info.callees.insert(mangled_name);
+                }
+                if !line.starts_with(".") {
+                    function_info.instructions_num += 1;
+                }
+            }
+            None => {}
+        }
+    }
+
+    info.info_by_function.retain(|_, x| x.instructions_num > 0);
+    Ok(info)
+}
+
 fn app() -> Result<()> {
     let compile_commands_path = "/home/jacques/blender/build_debug/compile_commands.json";
     let compile_commands =
@@ -102,39 +145,8 @@ fn app() -> Result<()> {
         .ok_or(eyre::eyre!("Can't find compile command."))?;
     let assembly = get_assembly_of_cmake_command(command)?;
 
-    let mut info_by_symbol: HashMap<&str, FunctionInfo> =
-        std::collections::hash_map::HashMap::new();
-    let mut current_symbol: Option<&str> = None;
-    for line in assembly.lines() {
-        if !line.starts_with("\t") && !line.starts_with(".") && line.len() >= 3 {
-            let symbol = &line[1..line.len() - 1];
-            current_symbol = Some(symbol);
-            info_by_symbol.insert(symbol, FunctionInfo::new(symbol));
-            continue;
-        }
-        match current_symbol {
-            Some(symbol) => {
-                let line = line.trim();
-                let info = info_by_symbol.get_mut(symbol).unwrap();
-
-                if line.starts_with("call") {
-                    let mangled_name = line
-                        .split_ascii_whitespace()
-                        .nth(1)
-                        .ok_or(eyre::eyre!("Couldn't parse function name."))?;
-                    info.callees.insert(mangled_name);
-                }
-                if !line.starts_with(".") {
-                    info.instructions_num += 1;
-                }
-            }
-            None => {}
-        }
-    }
-
-    info_by_symbol.retain(|_, x| x.instructions_num > 0);
-
-    println!("{:#?}", info_by_symbol);
+    let info = parse_assembly(&assembly)?;
+    println!("{:#?}", info);
     Ok(())
 }
 
