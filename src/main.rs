@@ -1,6 +1,6 @@
 use eyre::Result;
 use serde::Deserialize;
-use std::{collections::HashMap, io::Read, process::Command};
+use std::{collections::HashMap, io::Read, path::PathBuf, process::Command};
 
 #[derive(Deserialize, Debug)]
 struct CMakeCompileCommand {
@@ -8,6 +8,13 @@ struct CMakeCompileCommand {
     command: String,
     file: String,
     output: String,
+}
+
+struct AssemblyGenerationCommand {
+    program: PathBuf,
+    args: Vec<String>,
+    cwd: String,
+    output: PathBuf,
 }
 
 #[derive(Debug)]
@@ -33,20 +40,9 @@ fn load_cmake_compile_commands(path: &std::path::Path) -> Result<Vec<CMakeCompil
     Ok(compile_commands)
 }
 
-fn app() -> Result<()> {
-    let compile_commands_path = "/home/jacques/blender/build_debug/compile_commands.json";
-    let compile_commands =
-        load_cmake_compile_commands(std::path::Path::new(compile_commands_path))?;
-
-    let mut command_by_output = std::collections::hash_map::HashMap::new();
-    for command in &compile_commands {
-        command_by_output.insert(command.output.as_str(), command);
-    }
-
-    let command = command_by_output
-        .get("source/blender/modifiers/CMakeFiles/bf_modifiers.dir/intern/MOD_uvwarp.cc.o")
-        .ok_or(eyre::eyre!("Can't find compile command."))?;
-
+fn adapt_cmake_command_to_generate_assembly(
+    command: &CMakeCompileCommand,
+) -> Result<AssemblyGenerationCommand> {
     let mut args =
         shlex::split(&command.command).ok_or(eyre::eyre!("Can't split cmake command."))?;
     let output_index = args
@@ -61,17 +57,39 @@ fn app() -> Result<()> {
         .ok_or(eyre::eyre!("Failed to create assembly output path."))?
         .to_owned();
     args.insert(output_index, "-S".to_owned());
+    Ok(AssemblyGenerationCommand {
+        program: std::path::PathBuf::from(args[0].clone()),
+        args: args[1..].to_owned(),
+        cwd: command.directory.clone(),
+        output: assembly_file_path,
+    })
+}
 
-    let mut command = Command::new(&args[0])
-        .args(&args[1..])
-        .current_dir(&command.directory)
+fn app() -> Result<()> {
+    let compile_commands_path = "/home/jacques/blender/build_debug/compile_commands.json";
+    let compile_commands =
+        load_cmake_compile_commands(std::path::Path::new(compile_commands_path))?;
+
+    let mut command_by_output = std::collections::hash_map::HashMap::new();
+    for command in &compile_commands {
+        command_by_output.insert(command.output.as_str(), command);
+    }
+
+    let command = command_by_output
+        .get("source/blender/modifiers/CMakeFiles/bf_modifiers.dir/intern/MOD_uvwarp.cc.o")
+        .ok_or(eyre::eyre!("Can't find compile command."))?;
+    let asm_command = adapt_cmake_command_to_generate_assembly(command)?;
+
+    let mut compile_process = Command::new(asm_command.program)
+        .args(&asm_command.args)
+        .current_dir(&asm_command.cwd)
         .spawn()?;
-    if !command.wait()?.success() {
+    if !compile_process.wait()?.success() {
         return Err(eyre::eyre!("Generating assembly failed."));
     }
 
     let mut assembly = String::new();
-    std::fs::File::open(&assembly_file_path)?.read_to_string(&mut assembly)?;
+    std::fs::File::open(&asm_command.output)?.read_to_string(&mut assembly)?;
 
     let mut info_by_symbol: HashMap<&str, FunctionInfo> =
         std::collections::hash_map::HashMap::new();
