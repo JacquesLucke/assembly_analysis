@@ -1,7 +1,8 @@
 use eyre::Result;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::{io::Read, path::PathBuf, process::Command};
+use std::path::{Path, PathBuf};
+use std::{io::Read, process::Command};
 
 #[derive(Deserialize, Debug)]
 struct CMakeCompileCommand {
@@ -18,7 +19,7 @@ struct AssemblyGenerationCommand {
     output: PathBuf,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 struct FunctionInfo<'a> {
     name: &'a str,
     callees: std::collections::HashSet<&'a str>,
@@ -81,14 +82,13 @@ fn get_assembly_of_cmake_command(cmake_command: &CMakeCompileCommand) -> Result<
     let asm_command = adapt_cmake_command_to_generate_assembly(cmake_command)?;
     run_assembly_generation(&asm_command)?;
 
-    let mut assembly = String::new();
-    std::fs::File::open(&asm_command.output)?.read_to_string(&mut assembly)?;
+    let assembly = std::fs::read_to_string(&asm_command.output)?;
     std::fs::remove_file(&asm_command.output).expect("Can't remove file");
 
     Ok(assembly)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 struct ObjectFileAssemblyInfo<'a> {
     info_by_function: HashMap<&'a str, FunctionInfo<'a>>,
 }
@@ -131,21 +131,25 @@ fn parse_assembly(assembly: &str) -> Result<ObjectFileAssemblyInfo> {
 }
 
 fn app() -> Result<()> {
-    let compile_commands_path = "/home/jacques/blender/build_debug/compile_commands.json";
-    let compile_commands =
-        load_cmake_compile_commands(std::path::Path::new(compile_commands_path))?;
+    let compile_commands_path =
+        Path::new("/home/jacques/blender/build_debug/compile_commands.json");
+    let compile_commands = load_cmake_compile_commands(compile_commands_path)?;
 
-    let mut command_by_output = std::collections::hash_map::HashMap::new();
+    let mut command_by_output = HashMap::new();
     for command in &compile_commands {
         command_by_output.insert(command.output.as_str(), command);
     }
 
     let command = command_by_output
-        .get("source/blender/modifiers/CMakeFiles/bf_modifiers.dir/intern/MOD_uvwarp.cc.o")
+        .get("source/blender/modifiers/CMakeFiles/bf_modifiers.dir/intern/MOD_volume_displace.cc.o")
         .ok_or(eyre::eyre!("Can't find compile command."))?;
     let assembly = get_assembly_of_cmake_command(command)?;
 
     let info = parse_assembly(&assembly)?;
+
+    let output_json = serde_json::json!(info).to_string();
+    std::fs::write("test.json", output_json)?;
+
     println!("{:#?}", info);
     Ok(())
 }
