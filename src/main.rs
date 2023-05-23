@@ -65,6 +65,17 @@ fn adapt_cmake_command_to_generate_assembly(
     })
 }
 
+fn run_assembly_generation(command: &AssemblyGenerationCommand) -> Result<()> {
+    let mut process = Command::new(&command.program)
+        .args(&command.args)
+        .current_dir(&command.cwd)
+        .spawn()?;
+    if !process.wait()?.success() {
+        return Err(eyre::eyre!("Generating assembly failed."));
+    }
+    Ok(())
+}
+
 fn app() -> Result<()> {
     let compile_commands_path = "/home/jacques/blender/build_debug/compile_commands.json";
     let compile_commands =
@@ -79,14 +90,7 @@ fn app() -> Result<()> {
         .get("source/blender/modifiers/CMakeFiles/bf_modifiers.dir/intern/MOD_uvwarp.cc.o")
         .ok_or(eyre::eyre!("Can't find compile command."))?;
     let asm_command = adapt_cmake_command_to_generate_assembly(command)?;
-
-    let mut compile_process = Command::new(asm_command.program)
-        .args(&asm_command.args)
-        .current_dir(&asm_command.cwd)
-        .spawn()?;
-    if !compile_process.wait()?.success() {
-        return Err(eyre::eyre!("Generating assembly failed."));
-    }
+    run_assembly_generation(&asm_command)?;
 
     let mut assembly = String::new();
     std::fs::File::open(&asm_command.output)?.read_to_string(&mut assembly)?;
