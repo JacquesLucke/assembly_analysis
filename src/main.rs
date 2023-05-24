@@ -2,7 +2,7 @@ use eyre::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::{io::Read, process::Command};
+use std::process::Command;
 
 #[derive(Deserialize, Debug)]
 struct CMakeCompileCommand {
@@ -89,12 +89,12 @@ fn get_assembly_of_cmake_command(cmake_command: &CMakeCompileCommand) -> Result<
 }
 
 #[derive(Debug, Serialize)]
-struct ObjectFileAssemblyInfo<'a> {
+struct ParsedAssembly<'a> {
     info_by_function: HashMap<&'a str, FunctionInfo<'a>>,
 }
 
-fn parse_assembly(assembly: &str) -> Result<ObjectFileAssemblyInfo> {
-    let mut info = ObjectFileAssemblyInfo {
+fn parse_assembly(assembly: &str) -> Result<ParsedAssembly> {
+    let mut info = ParsedAssembly {
         info_by_function: HashMap::new(),
     };
     let mut current_symbol: Option<&str> = None;
@@ -141,7 +141,7 @@ fn app() -> Result<()> {
     }
 
     let command = command_by_output
-        .get("source/blender/modifiers/CMakeFiles/bf_modifiers.dir/intern/MOD_volume_displace.cc.o")
+        .get("source/blender/modifiers/CMakeFiles/bf_modifiers.dir/intern/MOD_collision.cc.o")
         .ok_or(eyre::eyre!("Can't find compile command."))?;
     let assembly = get_assembly_of_cmake_command(command)?;
 
