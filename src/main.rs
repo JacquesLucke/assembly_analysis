@@ -244,6 +244,15 @@ fn parse_data(object: ObjectID, assembly: &str, parsed: &mut ParsedData) {
     }
 }
 
+fn print_functions_with_most_instructions(parsed: &ParsedData) {
+    let mut data: Vec<_> = parsed.instructions_by_function.iter().collect();
+    data.sort_by(|a, b| a.1.cmp(b.1).reverse());
+    for (function_id, instr_num) in data {
+        let function = parsed.name_by_function_id.get(function_id).unwrap();
+        println!("{:?}: {}", function, instr_num);
+    }
+}
+
 fn app() -> Result<()> {
     let compile_commands_path =
         Path::new("/home/jacques/blender/build_debug/compile_commands.json");
@@ -267,6 +276,8 @@ fn app() -> Result<()> {
     let now = std::time::Instant::now();
     parse_data(object, &assembly, &mut parsed);
     println!("Parse: {} ms", now.elapsed().as_millis());
+
+    print_functions_with_most_instructions(&parsed);
 
     // let output_json = serde_json::json!(info).to_string();
     // std::fs::write("test.json", output_json)?;
