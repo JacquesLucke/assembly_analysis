@@ -25,20 +25,9 @@ struct FunctionID(usize);
 struct ObjectID(usize);
 
 #[derive(Debug, Serialize, PartialEq, Eq, Hash, Clone)]
-struct GlobalFunctionName {
-    name: String,
-}
-
-#[derive(Debug, Serialize, PartialEq, Eq, Hash, Clone)]
-struct LocalFunctionName {
-    object: ObjectID,
-    name: String,
-}
-
-#[derive(Debug, Serialize, PartialEq, Eq, Hash, Clone)]
 enum FunctionName {
-    Global(GlobalFunctionName),
-    Local(LocalFunctionName),
+    Global { name: String },
+    Local { name: String, object: ObjectID },
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq, Hash, Clone)]
@@ -154,13 +143,13 @@ fn parse_data(object: ObjectID, assembly: &str, parsed: &mut ParsedData) {
             .get(function_name)
             .unwrap_or(&LinkType::Local);
         let function = match link_type {
-            LinkType::Local => FunctionName::Local(LocalFunctionName {
+            LinkType::Local => FunctionName::Local {
                 object: object,
                 name: function_name.to_owned(),
-            }),
-            _ => FunctionName::Global(GlobalFunctionName {
+            },
+            _ => FunctionName::Global {
                 name: function_name.to_owned(),
-            }),
+            },
         };
         let next_function_id = FunctionID(parsed.function_id_by_name.len());
         let function_id = *parsed
@@ -200,9 +189,9 @@ fn parse_data(object: ObjectID, assembly: &str, parsed: &mut ParsedData) {
                         *callee_id
                     } else {
                         let next_function_id = FunctionID(parsed.function_id_by_name.len());
-                        let callee_name = FunctionName::Global(GlobalFunctionName {
+                        let callee_name = FunctionName::Global {
                             name: callee.to_owned(),
-                        });
+                        };
                         let callee_id = *parsed
                             .function_id_by_name
                             .entry(callee_name.clone())
@@ -349,9 +338,9 @@ fn app() -> Result<()> {
     // print_functions_in_all_objects(&parsed);
     print_function_info(
         &parsed,
-        &FunctionName::Global(GlobalFunctionName {
+        &FunctionName::Global {
             name: "_ZN7blender10IndexRangeC2El".to_owned(),
-        }),
+        },
     )?;
 
     // let output_json = serde_json::json!(info).to_string();
