@@ -221,6 +221,11 @@ fn parse_data(object: ObjectID, assembly: &str, parsed: &mut ParsedData) {
                 continue;
             }
             let label_name = &line[..line.len() - 1];
+            let label_name = if let Some(alias) = aliases.get(label_name) {
+                alias
+            } else {
+                label_name
+            };
             if let Some(function_id) = id_by_function_name.get(label_name).copied() {
                 current_function = Some(function_id);
                 parsed
