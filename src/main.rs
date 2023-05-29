@@ -1,6 +1,6 @@
 use eyre::Result;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -8,7 +8,6 @@ use std::process::Command;
 struct CMakeCompileCommand {
     directory: String,
     command: String,
-    file: String,
     output: String,
 }
 
@@ -19,21 +18,49 @@ struct AssemblyGenerationCommand {
     output: PathBuf,
 }
 
-#[derive(Debug, Serialize)]
-struct FunctionInfo<'a> {
-    name: &'a str,
-    callees: std::collections::HashSet<&'a str>,
-    instructions_num: usize,
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq, Hash)]
+struct FunctionID(usize);
+
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq, Hash)]
+struct ObjectID(usize);
+
+#[derive(Debug, Serialize, PartialEq, Eq, Hash, Clone)]
+struct GlobalFunctionName {
+    name: String,
 }
 
-impl<'a> FunctionInfo<'a> {
-    fn new(name: &'a str) -> FunctionInfo {
-        FunctionInfo {
-            name: name,
-            callees: std::collections::HashSet::new(),
-            instructions_num: 0,
-        }
-    }
+#[derive(Debug, Serialize, PartialEq, Eq, Hash, Clone)]
+struct LocalFunctionName {
+    object: ObjectID,
+    name: String,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq, Hash, Clone)]
+enum FunctionName {
+    Global(GlobalFunctionName),
+    Local(LocalFunctionName),
+}
+
+#[derive(Debug, Serialize)]
+struct ObjectName {
+    path: PathBuf,
+}
+
+#[derive(Debug, Default, Serialize)]
+struct ParsedData {
+    object_id_by_name: HashMap<ObjectName, ObjectID>,
+    name_by_object_id: HashMap<ObjectID, ObjectName>,
+
+    function_id_by_name: HashMap<FunctionName, FunctionID>,
+    name_by_function_id: HashMap<FunctionID, FunctionName>,
+
+    functions_by_object: HashMap<ObjectID, Vec<FunctionID>>,
+    objects_by_function: HashMap<FunctionID, Vec<ObjectID>>,
+
+    callers_by_callee: HashMap<FunctionID, Vec<FunctionID>>,
+    callees_by_caller: HashMap<FunctionID, Vec<FunctionID>>,
+
+    instructions_by_function: HashMap<FunctionID, usize>,
 }
 
 fn load_cmake_compile_commands(path: &std::path::Path) -> Result<Vec<CMakeCompileCommand>> {
@@ -88,46 +115,133 @@ fn get_assembly_of_cmake_command(cmake_command: &CMakeCompileCommand) -> Result<
     Ok(assembly)
 }
 
-#[derive(Debug, Serialize)]
-struct ParsedAssembly<'a> {
-    info_by_function: HashMap<&'a str, FunctionInfo<'a>>,
+enum LinkType {
+    Local,
+    Weak,
+    Global,
 }
 
-fn parse_assembly(assembly: &str) -> Result<ParsedAssembly> {
-    let mut info = ParsedAssembly {
-        info_by_function: HashMap::new(),
-    };
-    let mut current_symbol: Option<&str> = None;
-    for line in assembly.lines() {
-        if !line.starts_with("\t") && !line.starts_with(".") && line.len() >= 3 {
-            let symbol = &line[1..line.len() - 1];
-            current_symbol = Some(symbol);
-            info.info_by_function
-                .insert(symbol, FunctionInfo::new(symbol));
-            continue;
-        }
-        match current_symbol {
-            Some(symbol) => {
-                let line = line.trim();
-                let mut function_info = info.info_by_function.get_mut(symbol).unwrap();
+fn parse_data(object: ObjectID, assembly: &str, parsed: &mut ParsedData) {
+    let mut link_type_by_name: HashMap<&str, LinkType> = HashMap::new();
+    let mut function_names: HashSet<&str> = HashSet::new();
+    let mut aliases: HashMap<&str, &str> = HashMap::new();
 
-                if line.starts_with("call") {
-                    let mangled_name = line
-                        .split_ascii_whitespace()
-                        .nth(1)
-                        .ok_or(eyre::eyre!("Couldn't parse function name."))?;
-                    function_info.callees.insert(mangled_name);
-                }
-                if !line.starts_with(".") {
-                    function_info.instructions_num += 1;
-                }
+    for line in assembly.lines() {
+        let trimmed_line = line.trim();
+        if trimmed_line.starts_with(".type") && trimmed_line.ends_with("@function") {
+            let function_name =
+                &trimmed_line[".type\t".len()..(trimmed_line.len() - ", @function".len())];
+            function_names.insert(function_name);
+        } else if trimmed_line.starts_with(".weak\t") {
+            let function_name = &trimmed_line[".weak\t".len()..];
+            link_type_by_name.insert(function_name, LinkType::Weak);
+        } else if trimmed_line.starts_with(".globl\t") {
+            let function_name = &trimmed_line[".globl\t".len()..];
+            link_type_by_name.insert(function_name, LinkType::Global);
+        } else if trimmed_line.starts_with(".set\t") {
+            if let Some(comma_i) = trimmed_line.find(",") {
+                let old_name = &trimmed_line[".set\t".len()..comma_i];
+                let new_name = &trimmed_line[comma_i..];
+                aliases.insert(old_name, new_name);
             }
-            None => {}
         }
     }
 
-    info.info_by_function.retain(|_, x| x.instructions_num > 0);
-    Ok(info)
+    let mut id_by_function_name: HashMap<&str, FunctionID> = HashMap::new();
+
+    for &function_name in function_names.iter() {
+        let link_type = link_type_by_name
+            .get(function_name)
+            .unwrap_or(&LinkType::Local);
+        let function = match link_type {
+            LinkType::Local => FunctionName::Local(LocalFunctionName {
+                object: object,
+                name: function_name.to_owned(),
+            }),
+            _ => FunctionName::Global(GlobalFunctionName {
+                name: function_name.to_owned(),
+            }),
+        };
+        let next_function_id = FunctionID(parsed.function_id_by_name.len());
+        let function_id = *parsed
+            .function_id_by_name
+            .entry(function.clone())
+            .or_insert(next_function_id);
+        parsed.name_by_function_id.insert(function_id, function);
+
+        id_by_function_name.insert(function_name, function_id);
+    }
+
+    let mut current_function: Option<FunctionID> = None;
+    for line in assembly.lines() {
+        if let Some(function_id) = current_function {
+            let trimmed_line = line.trim();
+            if trimmed_line.starts_with(".size\t") {
+                current_function = None;
+                continue;
+            }
+            if trimmed_line.starts_with(".") {
+                continue;
+            }
+            *parsed
+                .instructions_by_function
+                .entry(function_id)
+                .or_default() += 1;
+            if trimmed_line.starts_with("call\t") {
+                let mut callee = &trimmed_line["call\t".len()..];
+                if !callee.starts_with("*%") {
+                    if callee.ends_with("@PLT") {
+                        callee = &callee[..(callee.len() - "@PLT".len())];
+                    }
+                    if let Some(alias) = aliases.get(callee) {
+                        callee = alias;
+                    }
+                    let callee_id = if let Some(callee_id) = id_by_function_name.get(callee) {
+                        *callee_id
+                    } else {
+                        let next_function_id = FunctionID(parsed.function_id_by_name.len());
+                        *parsed
+                            .function_id_by_name
+                            .entry(FunctionName::Global(GlobalFunctionName {
+                                name: callee.to_owned(),
+                            }))
+                            .or_insert(next_function_id)
+                    };
+                    parsed
+                        .callees_by_caller
+                        .entry(function_id)
+                        .or_default()
+                        .push(callee_id);
+                    parsed
+                        .callers_by_callee
+                        .entry(callee_id)
+                        .or_default()
+                        .push(function_id);
+                }
+            }
+        } else {
+            if line.starts_with("\t") {
+                continue;
+            }
+            if !line.ends_with(":") {
+                continue;
+            }
+            let label_name = &line[..line.len() - 1];
+            if let Some(function_id) = id_by_function_name.get(label_name).copied() {
+                current_function = Some(function_id);
+                parsed
+                    .functions_by_object
+                    .entry(object)
+                    .or_default()
+                    .push(function_id);
+                parsed
+                    .objects_by_function
+                    .entry(function_id)
+                    .or_default()
+                    .push(object);
+            }
+        }
+    }
 }
 
 fn app() -> Result<()> {
@@ -141,16 +255,23 @@ fn app() -> Result<()> {
     }
 
     let command = command_by_output
-        .get("source/blender/modifiers/CMakeFiles/bf_modifiers.dir/intern/MOD_collision.cc.o")
+        .get("source/blender/functions/CMakeFiles/bf_functions.dir/intern/field.cc.o")
         .ok_or(eyre::eyre!("Can't find compile command."))?;
+    let now = std::time::Instant::now();
     let assembly = get_assembly_of_cmake_command(command)?;
+    println!("Generate Assembly: {} ms", now.elapsed().as_millis());
 
-    let info = parse_assembly(&assembly)?;
+    let mut parsed = ParsedData::default();
+    let object = ObjectID(4);
 
-    let output_json = serde_json::json!(info).to_string();
-    std::fs::write("test.json", output_json)?;
+    let now = std::time::Instant::now();
+    parse_data(object, &assembly, &mut parsed);
+    println!("Parse: {} ms", now.elapsed().as_millis());
 
-    println!("{:#?}", info);
+    // let output_json = serde_json::json!(info).to_string();
+    // std::fs::write("test.json", output_json)?;
+
+    // println!("{:#?}", info);
     Ok(())
 }
 
