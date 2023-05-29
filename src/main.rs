@@ -200,12 +200,17 @@ fn parse_data(object: ObjectID, assembly: &str, parsed: &mut ParsedData) {
                         *callee_id
                     } else {
                         let next_function_id = FunctionID(parsed.function_id_by_name.len());
-                        *parsed
+                        let callee_name = FunctionName::Global(GlobalFunctionName {
+                            name: callee.to_owned(),
+                        });
+                        let callee_id = *parsed
                             .function_id_by_name
-                            .entry(FunctionName::Global(GlobalFunctionName {
-                                name: callee.to_owned(),
-                            }))
-                            .or_insert(next_function_id)
+                            .entry(callee_name.clone())
+                            .or_insert(next_function_id);
+                        parsed
+                            .name_by_function_id
+                            .insert(next_function_id, callee_name);
+                        callee_id
                     };
                     parsed
                         .callees_by_caller
@@ -253,6 +258,52 @@ fn print_functions_with_most_instructions(parsed: &ParsedData) {
     }
 }
 
+fn print_functions_in_all_objects(parsed: &ParsedData) {
+    let objects_num = parsed.object_id_by_name.len();
+    for (function_id, objects) in parsed.objects_by_function.iter() {
+        if objects.len() == objects_num {
+            let function = parsed.name_by_function_id.get(function_id).unwrap();
+            println!("{:?}", function);
+        }
+    }
+}
+
+fn print_function_info(parsed: &ParsedData, function: &FunctionName) -> Result<()> {
+    let function_id = parsed
+        .function_id_by_name
+        .get(function)
+        .ok_or(eyre::eyre!("Can't find function."))?;
+    let objects = parsed
+        .objects_by_function
+        .get(function_id)
+        .cloned()
+        .unwrap_or_default();
+    let callers = parsed
+        .callers_by_callee
+        .get(function_id)
+        .cloned()
+        .unwrap_or_default();
+    let callees = parsed
+        .callees_by_caller
+        .get(function_id)
+        .cloned()
+        .unwrap_or_default();
+    println!("Function: {:?}", function);
+    println!("  Objects:");
+    for object in objects {
+        println!("    {:?}", parsed.name_by_object_id.get(&object).unwrap());
+    }
+    println!("  Callers:");
+    for caller in callers {
+        println!("    {:?}", parsed.name_by_function_id.get(&caller).unwrap());
+    }
+    println!("  Callees:");
+    for callee in callees {
+        println!("    {:?}", parsed.name_by_function_id.get(&callee).unwrap());
+    }
+    Ok(())
+}
+
 fn app() -> Result<()> {
     let compile_commands_path =
         Path::new("/home/jacques/blender/build_debug/compile_commands.json");
@@ -263,29 +314,45 @@ fn app() -> Result<()> {
         command_by_output.insert(command.output.as_str(), command);
     }
 
-    let command = command_by_output
-        .get("source/blender/functions/CMakeFiles/bf_functions.dir/intern/field.cc.o")
-        .ok_or(eyre::eyre!("Can't find compile command."))?;
-    let now = std::time::Instant::now();
-    let assembly = get_assembly_of_cmake_command(command)?;
-    println!("Generate Assembly: {} ms", now.elapsed().as_millis());
+    let files = vec![
+        "source/blender/functions/CMakeFiles/bf_functions.dir/intern/field.cc.o",
+        "source/blender/functions/CMakeFiles/bf_functions.dir/intern/lazy_function_graph_executor.cc.o",
+    ];
 
     let mut parsed = ParsedData::default();
 
-    let next_object_id = ObjectID(parsed.object_id_by_name.len());
-    let object_name = ObjectName {
-        path: "field.cc.o".into(),
-    };
-    let object = *parsed
-        .object_id_by_name
-        .entry(object_name)
-        .or_insert(next_object_id);
+    for file in files {
+        let command = command_by_output
+            .get(file)
+            .ok_or(eyre::eyre!("Can't find compile command."))?;
+        let now = std::time::Instant::now();
+        let assembly = get_assembly_of_cmake_command(command)?;
+        println!("Generate Assembly: {} ms", now.elapsed().as_millis());
 
-    let now = std::time::Instant::now();
-    parse_data(object, &assembly, &mut parsed);
-    println!("Parse: {} ms", now.elapsed().as_millis());
+        let next_object_id = ObjectID(parsed.object_id_by_name.len());
+        let object_name = ObjectName { path: file.into() };
+        let object = *parsed
+            .object_id_by_name
+            .entry(object_name.clone())
+            .or_insert(next_object_id);
+        parsed
+            .name_by_object_id
+            .entry(object)
+            .or_insert(object_name);
 
-    print_functions_with_most_instructions(&parsed);
+        let now = std::time::Instant::now();
+        parse_data(object, &assembly, &mut parsed);
+        println!("Parse: {} ms", now.elapsed().as_millis());
+    }
+
+    // print_functions_with_most_instructions(&parsed);
+    // print_functions_in_all_objects(&parsed);
+    print_function_info(
+        &parsed,
+        &FunctionName::Global(GlobalFunctionName {
+            name: "_ZN7blender10IndexRangeC2El".to_owned(),
+        }),
+    )?;
 
     // let output_json = serde_json::json!(info).to_string();
     // std::fs::write("test.json", output_json)?;
