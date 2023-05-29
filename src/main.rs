@@ -41,7 +41,7 @@ enum FunctionName {
     Local(LocalFunctionName),
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, PartialEq, Eq, Hash, Clone)]
 struct ObjectName {
     path: PathBuf,
 }
@@ -271,7 +271,15 @@ fn app() -> Result<()> {
     println!("Generate Assembly: {} ms", now.elapsed().as_millis());
 
     let mut parsed = ParsedData::default();
-    let object = ObjectID(4);
+
+    let next_object_id = ObjectID(parsed.object_id_by_name.len());
+    let object_name = ObjectName {
+        path: "field.cc.o".into(),
+    };
+    let object = *parsed
+        .object_id_by_name
+        .entry(object_name)
+        .or_insert(next_object_id);
 
     let now = std::time::Instant::now();
     parse_data(object, &assembly, &mut parsed);
