@@ -54,11 +54,11 @@ struct ParsedData {
     function_id_by_name: HashMap<FunctionName, FunctionID>,
     name_by_function_id: HashMap<FunctionID, FunctionName>,
 
-    functions_by_object: HashMap<ObjectID, Vec<FunctionID>>,
-    objects_by_function: HashMap<FunctionID, Vec<ObjectID>>,
+    functions_by_object: HashMap<ObjectID, HashSet<FunctionID>>,
+    objects_by_function: HashMap<FunctionID, HashSet<ObjectID>>,
 
-    callers_by_callee: HashMap<FunctionID, Vec<FunctionID>>,
-    callees_by_caller: HashMap<FunctionID, Vec<FunctionID>>,
+    callers_by_callee: HashMap<FunctionID, HashSet<FunctionID>>,
+    callees_by_caller: HashMap<FunctionID, HashSet<FunctionID>>,
 
     instructions_by_function: HashMap<FunctionID, usize>,
 }
@@ -216,12 +216,12 @@ fn parse_data(object: ObjectID, assembly: &str, parsed: &mut ParsedData) {
                         .callees_by_caller
                         .entry(function_id)
                         .or_default()
-                        .push(callee_id);
+                        .insert(callee_id);
                     parsed
                         .callers_by_callee
                         .entry(callee_id)
                         .or_default()
-                        .push(function_id);
+                        .insert(function_id);
                 }
             }
         } else {
@@ -238,12 +238,12 @@ fn parse_data(object: ObjectID, assembly: &str, parsed: &mut ParsedData) {
                     .functions_by_object
                     .entry(object)
                     .or_default()
-                    .push(function_id);
+                    .insert(function_id);
                 parsed
                     .objects_by_function
                     .entry(function_id)
                     .or_default()
-                    .push(object);
+                    .insert(object);
             }
         }
     }
